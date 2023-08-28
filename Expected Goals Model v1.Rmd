@@ -1,0 +1,257 @@
+---
+title: "Expected Goals Model v1"
+author: "Matt Sheridan"
+date: "2023-08-27"
+output: pdf_document
+---
+
+```{r}
+library(data.table)
+library(hexbin)
+library(glmnet)
+library(readxl)
+library(ggimage)
+library(hockeyR)
+library(dplyr)
+library(ggplot2)
+library(sportyR)
+
+#shots <- fread("shots_2007-2021.csv")
+#passing_data <- read.csv("passing_data.csv")
+
+
+#Need to figure out what to do do join shots and passing other than time
+# and why are there more shots than passes before shots lol.
+```
+
+
+```{r}
+
+logos_colors <- team_logos_colors %>% mutate(filename = paste0(substr(team_logo_espn, 43, 45), ".png", ''))
+
+
+LogLoss<-function(actual, predicted)
+{
+  result=-1/length(actual)*(sum((actual*log(predicted)+(1-actual)*log(1-predicted))))
+  return(result)
+}
+
+shots_2022 <- read.csv("shots_2022.csv") %>% 
+  filter((shotOnEmptyNet == 0) & (isPlayoffGame == 0)) %>% 
+  mutate(shooting_team = ifelse(team == "HOME", homeTeamCode, awayTeamCode))
+
+shots_2021 <- read.csv("shots_2021.csv") %>% 
+  filter((shotOnEmptyNet == 0) & (isPlayoffGame == 0)) %>% 
+  mutate(shooting_team = ifelse(team == "HOME", homeTeamCode, awayTeamCode))
+
+```
+
+```{r}
+
+glm_2021 <- glm(goal ~ shotAngleAdjusted + shotDistance + shotType + shotRush + offWing, shots_2021, family = binomial)
+LogLoss(shots_2021$goal, predict(glm_2021, type = 'response'))
+LogLoss(shots_2021$goal, shots_2021$xGoal)
+
+LogLoss(shots_2022$goal, predict(glm_2021, newdata = shots_2022, type = 'response'))
+LogLoss(shots_2022$goal, shots_2022$xGoal)
+
+shots_2021$predictions <- predict(glm_2021, type = 'response')
+shots_2022$predictions <- predict(glm_2021, newdata = shots_2022, type = 'response')
+
+
+summary_2021 <- shots_2021 %>% left_join(logos_colors, by = c("shooting_team" = "team_abbr"))  %>% 
+  group_by(shooterName) %>% 
+  summarise(tot_xG_mod = sum(predictions), 
+            tot_xg_mp = sum(xGoal), 
+            tot_g = sum(goal),
+            gax_mod = tot_g - tot_xG_mod,
+            gax_mp = tot_g - tot_xg_mp,
+            logo = head(filename, 1),
+            color = head(team_color1, 1))
+
+summary_2022 <- shots_2022 %>% left_join(logos_colors, by = c("shooting_team" = "team_abbr")) %>%
+  group_by(shooterName) %>% 
+  summarise(tot_xG_mod = sum(predictions), 
+            tot_xg_mp = sum(xGoal), 
+            tot_g = sum(goal),
+            gax_mod = tot_g - tot_xG_mod,
+            gax_mp = tot_g - tot_xg_mp,
+            logo = head(filename, 1),
+            color = head(team_color1, 1))
+
+rm(glm_2021)
+
+```
+
+
+```{r, fig.width=15, fig.size = 15}
+
+summary_2021 %>% arrange(desc(gax_mod)) %>% head(10) %>% ggplot(aes(x = reorder(shooterName, +gax_mod), y = gax_mod, fill = color)) +
+  theme(axis.text.y = element_text(size=13), 
+        axis.text.x = element_text(size=13),
+        axis.title.y = element_text(size=13),
+        axis.title.x = element_text(size=13))+
+  geom_bar(stat = 'identity') + 
+  coord_flip() + 
+  geom_image(aes(image = logo), size = 0.1) + 
+  scale_fill_identity() + 
+  xlab("Shooter") + 
+  ylab("Goals above expected") + ggtitle("My Model Shooter Ranks 21-22")
+
+
+summary_2021 %>% arrange(desc(gax_mp)) %>% head(10) %>% ggplot(aes(x = reorder(shooterName, +gax_mp), y = gax_mp, fill = color)) +
+  theme(axis.text.y = element_text(size=13), 
+        axis.text.x = element_text(size=13),
+        axis.title.y = element_text(size=13),
+        axis.title.x = element_text(size=13))+
+  geom_bar(stat = 'identity') + 
+  coord_flip() + 
+  geom_image(aes(image = logo), size = 0.1) + 
+  scale_fill_identity() + 
+  xlab("Shooter") + 
+  ylab("Goals above expected") + ggtitle("MoneyPuck Model Shooter Ranks 21-22")
+
+summary_2022 %>% arrange(desc(gax_mod)) %>% head(10) %>% ggplot(aes(x = reorder(shooterName, +gax_mod), y = gax_mod, fill = color)) +
+  theme(axis.text.y = element_text(size=13), 
+        axis.text.x = element_text(size=13),
+        axis.title.y = element_text(size=13),
+        axis.title.x = element_text(size=13))+
+  geom_bar(stat = 'identity') + 
+  coord_flip() + 
+  geom_image(aes(image = logo), size = 0.1) + 
+  scale_fill_identity() + 
+  xlab("Shooter") + 
+  ylab("Goals above expected") + ggtitle("My Model Shooter Ranks 22-23")
+
+
+summary_2022 %>% arrange(desc(gax_mp)) %>% head(10) %>% ggplot(aes(x = reorder(shooterName, +gax_mp), y = gax_mp, fill = color)) +
+  theme(axis.text.y = element_text(size=13), 
+        axis.text.x = element_text(size=13),
+        axis.title.y = element_text(size=13),
+        axis.title.x = element_text(size=13))+
+  geom_bar(stat = 'identity') + 
+  coord_flip() + 
+  geom_image(aes(image = logo), size = 0.1) + 
+  scale_fill_identity() + 
+  xlab("Shooter") + 
+  ylab("Goals above expected") + ggtitle("MoneyPuck Model Shooter Ranks 22-23")
+
+
+```
+
+
+```{r}
+
+combined <- summary_2022 %>% left_join(summary_2021, by = 'shooterName') %>% select(colnames(.)[2:6], colnames(.)[9:13]) %>% na.omit()
+
+data.frame(cor(combined))
+```
+
+```{r}
+
+
+
+shots_2019 <- shots %>% 
+  filter((season == 2019) & (shotOnEmptyNet == 0) & (isPlayoffGame == 0)) %>% 
+  mutate(is_goal = event == 'GOAL', shooting_team = ifelse(team == "HOME", homeTeamCode, awayTeamCode))
+
+
+dp88_shots <- filter(shots_2019,(shooting_team == "BOS") & (playerNumThatDidEvent == 88))
+
+geom_hockey("nhl") + 
+  geom_point(data = dp88_shots, 
+             aes(arenaAdjustedXCordABS, yCord, color = is_goal),size = 2, 
+             alpha = ifelse(dp88_shots$is_goal, 1, 0.3)) +
+  scale_color_manual(values = c("#f9b316", "#141414"))
+
+colnames(shots_2019)
+
+glm19 <- glm(is_goal ~ shotAngleAdjusted + shotDistance + shotType + shotRush + offWing, shots_2019, family = binomial)
+
+```
+
+```{r}
+
+LogLoss(shots_2019$is_goal, shots_2019$xGoal)
+LogLoss(shots_2019$is_goal, predict(glm19, type = 'response'))
+
+hist(shots_2019$xGoal)
+hist(predict(glm19, type = 'response'))
+```
+
+```{r, eval = F, include = F}
+
+passing_data <- read_excel(files_2022[[1]])[,1:22] %>% 
+  mutate(Time = strftime(Time, tz = 'UTC', "%H:%M")) %>% 
+  filter(!is.na(Time)) 
+#%>% 
+#  select(`Game ID`, `G?`, `Home Score State`, 
+#         `A1 Zone` , `A2 Zone` , `A3 Zone`, 
+#`SC?`, `SOG?`, Screen, Situation, 
+#         Oddman, A1, A2, A3, Shooter, Team, 
+#         Strength, Period, Time)
+
+
+
+file_list <- list.files("C:/Users/matth/OneDrive/Desktop/XG Model/Passing_2022")
+
+files_2022 <- lapply(file_list, FUN = function(x) paste0("Passing_2022/", x))
+
+
+
+for (i in 933:length(files_2022)){
+  print(i)
+  new_dta <- read_excel(files_2022[[i]])[,1:22]
+  
+  #%>% 
+  #mutate(Time = strftime(Time, tz = 'UTC', "%H:%M")) %>% 
+  #filter(!is.na(Time)) %>% 
+  #select(`Game ID`, `G?`, `Home Score State`, 
+  #       `A1 Zone` , `A2 Zone` , `A3 Zone`, 
+  #       `SC?`, `SOG?`, Screen, Situation, 
+  #       Oddman, A1, A2, A3, Shooter, Team, 
+  #       Strength, Period, Time)
+  passing_data <- rbind(passing_data, new_dta)
+}
+
+write.csv(passing_data, "passing_data_2022.csv")
+
+```
+
+
+```{r, eval = F, include = F}
+
+#file_list <- list.files("C:/Users/matth/OneDrive/Desktop/XG Model/Passing")
+
+#files_2021 <- lapply(file_list, FUN = function(x) paste0("Passing/", x))
+
+#passing_data <- read_excel(files_2021[[1]]) %>% select(`Game ID`, `G?`, `Home Score State`, `A1 Zone` , `A2 Zone` , `A3 Zone`, `SC?`, `SOG?`, Screen, Situation, Oddman, A1, A2, A3, Shooter, Team, Strength, Period, Time)
+
+
+"
+for (i in 419:length(files_2021)){
+  print(file_list[i])
+  print(colnames(read_excel(files_2021[[i]])))
+  
+  new_dta <- read_excel(files_2021[[i]]) %>% select(`Game ID`, `G?`, `Home Score State`, `A1 Zone` , `A2 Zone` , `A3 Zone`, `SC?`, `SOG?`, Screen, Situation, Oddman, A1, A2, A3, Shooter, Team, Strength, Period, Time)
+  passing_data <- rbind(passing_data, new_dta)
+}
+"
+#write.csv(passing_data, "passing_data.csv")
+```
+
+
+```{r}
+
+#filter(passing_data, Game.ID == 20008)
+
+```
+
+```{r}
+
+passing_data <- passing_data %>% filter(!(is.na(Time)))
+
+shots_2021 <- shots %>% filter((season == 2020) & (game_id %in% unique(passing_data$Game.ID))) 
+
+filter(shots_2021, (game_id == 20008) )
+```

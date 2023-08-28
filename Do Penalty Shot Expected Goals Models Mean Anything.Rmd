@@ -1,0 +1,371 @@
+---
+title: "Do Penalty Shot Expected Goals Models Mean Anything?"
+author: "---"
+date: "2023-07-21"
+output: pdf_document
+---
+
+Do penalty shot expected goals models mean anything...at all? We all know that expected goals models can be pretty accurate - you input some data about the shot distance, angle, off the rush, and more, and can spit out a probability of a goal using 
+
+```{r}
+library(dplyr)
+library(data.table)
+library(sportyR)
+library(ggplot2)
+library(hockeyR)
+library(hexbin)
+library(glmnet)
+
+LogLoss<-function(actual, predicted)
+{
+  result=-1/length(actual)*(sum((actual*log(predicted)+(1-actual)*log(1-predicted))))
+  return(result)
+}
+
+library(ggimage)
+
+#list.files("C:/Users/matth/OneDrive/Desktop/XG Model/",pattern="png", full.names=TRUE)
+
+logos_colors <- team_logos_colors %>% mutate(filename = paste0(substr(team_logo_espn, 43, 45), ".png", ''))
+
+for (i in 1:nrow(team_logos_colors)){
+  url <- team_logos_colors[i, ]$team_logo_espn
+  name <- paste0(substr(url, 43, 45), ".png", '')
+  if (!file.exists(name)){
+    download.file(url, name, mode = "wb")    
+  }
+}
+
+
+ps <- read.csv(file = "penalty_shots_10_23.csv") %>% 
+  filter(abs(x) >= 5) %>%
+  mutate(goal = ifelse(event == 'Goal', 1, 0),
+         event_player_2_name = ifelse(is.na(event_player_2_name), 
+                                      ifelse(event_team_type == 'home', away_goalie, home_goalie)
+                                      ,event_player_2_name),
+         strength_code = as.factor(strength_code))
+
+ps[(ps$event_player_1_name == 'Connor.McDavid') & is.na(ps$event_player_2_name),]$event_player_2_name <- 'James.Reimer'
+ps <- ps %>% left_join(logos_colors, by = c("event_team_abbr" = "team_abbr"))
+```
+
+```{r, eval=F, include=F}
+penalty_shots <- data.frame(load_pbp(season = 2011, F) %>% 
+                              filter(secondary_type == 'Penalty Shot') %>% 
+                              select(event, secondary_type, event_team, 
+                                     event_team_type, description, period, 
+                                     period_seconds, home_score, away_score,
+                                     event_player_1_name, event_player_2_name,
+                                     strength_state, strength_code, event_idx,
+                                     x, y, x_fixed, y_fixed, shot_distance, shot_angle, 
+                                     game_id, event_player_1_id, event_player_1_id,
+                                     event_player_1_id, event_player_2_id, 
+                                     event_player_2_link, period_type,
+                                     event_team_id, event_team_abbr, home_final,
+                                     away_final, season, venue_name, home_abbreviation, 
+                                     away_abbreviation, home_goalie, away_goalie))
+years <- 2012:2023
+
+for (i in 1:length(years)){
+  print(years[i])
+  curr <- load_pbp(season = years[i], F) %>% 
+    filter(secondary_type == 'Penalty Shot') %>% 
+                              select(event, secondary_type, event_team, 
+                                     event_team_type, description, period, 
+                                     period_seconds, home_score, away_score,
+                                     event_player_1_name, event_player_2_name,
+                                     strength_state, strength_code, event_idx,
+                                     x, y, x_fixed, y_fixed, shot_distance, shot_angle, 
+                                     game_id, event_player_1_id, event_player_1_id,
+                                     event_player_1_id, event_player_2_id, 
+                                     event_player_2_link, period_type,
+                                     event_team_id, event_team_abbr, home_final,
+                                     away_final, season, venue_name, home_abbreviation, 
+                                     away_abbreviation, home_goalie, away_goalie)
+  penalty_shots <- rbind(penalty_shots,curr)
+}
+
+```
+
+
+
+```{r, eval = F, include = F}
+
+
+test_df <- head(shots, 50000)
+test_df <- test_df %>% filter(shotOnEmptyNet == 0)
+test_df$teamCode
+colnames(test_df)
+```
+
+
+```{r}
+set.seed(37)
+train_rows <- sample(nrow(ps), 0.75*nrow(ps))
+train <- ps[train_rows, ] %>% select(shot_distance, shot_angle, goal)
+train_viz <- ps[train_rows, ] %>% select(x, y, goal)
+
+test <- ps[-train_rows, ] %>% select(shot_distance, shot_angle, goal)
+test_viz <- ps[-train_rows, ] %>% select(x, y, goal)
+
+glm1 <- glm(goal~., train, family = binomial)
+
+
+geom_hockey("nhl") + 
+  geom_point(data = train_viz, 
+             aes(abs(x), y, color = as.factor(goal)),
+             size = 2, 
+             alpha = ifelse(train_viz$goal == 1, 1, 0.5)) +
+  geom_point(data = test_viz, 
+             aes(-abs(x), y, color = as.factor(goal)),
+             size = 2, 
+             alpha = ifelse(test_viz$goal == 1, 1, 0.5)) + 
+  scale_color_manual(values = c("#f9b316", "#141414"),name = "Shot Result", breaks = c(0,1), labels = c("No Goal", "Goal"))
+
+options(scipen=999)
+
+create_viz_data_glm <- function(dta = grid){
+  dta$shot_angle <- (atan(abs(dta$y)/(dta$x)) * 180) / pi
+  dta$shot_distance <- sqrt((89-dta$x)^2 + abs(dta$y)^2)
+  mat <- dta %>% select(shot_distance, shot_angle)
+  return(mat)
+}
+
+
+x_viz <- seq(25, 89, .1)
+y_viz <- seq(-40, 40, .1)
+grid <- expand.grid(list(x = x_viz, y = y_viz))
+
+
+summary(glm1)
+
+hist(predict(glm1, type='response'), main = 'train and test prediction distribution')
+abline(v = mean(train$goal), col = 'red', lwd = 2)
+abline(v = mean(ps$goal), col = 'green', lwd = 2, lty='dashed')
+hist(predict(glm1, test, type='response'), main = 'test prediction distribution', add = T, col= 'orange')
+abline(v = mean(test$goal), col = 'blue', lwd = 2)
+abline(v = mean(ps$goal), col = 'green', lwd = 2, lty='dashed')
+legend("topleft", legend=c("total mean goal %", "train sample mean goal %", 'test sample mean goal %'),
+       col=c("green", "red", "blue"), lty=c(2, 1, 1), cex=0.8)
+legend("topright", legend=c("train sample predictions", "test sample predictions"),
+       col=c("grey", "orange"), lty=1, cex=0.8, lwd = 3)
+
+LogLoss(train$goal, predict(glm1, type = 'response'))
+LogLoss(test$goal, predict(glm1, newdata = test, type = 'response'))
+
+
+```
+
+
+```{r}
+
+viz_predictions <- predict(glm1, create_viz_data_glm(), type='response')
+
+viz_data <- cbind(grid, viz_predictions)
+geom_hockey("NHL") + 
+  geom_raster(data = viz_data, aes(x, y, fill=viz_predictions)) + 
+  scale_fill_distiller(palette = "Spectral", direction = -1) +
+  labs(fill = "Goal Probability")
+
+```
+
+```{r}
+
+ps$xG <- predict(glm1, ps, type='response')
+
+best <- ps %>% group_by(event_player_1_name) %>% summarize(tot_xG = sum(xG), tot_G = sum(goal), GaX = tot_G - tot_xG, att = n(), team_col = head(team_color1,1), logo = head(filename,1)) %>% arrange(desc(GaX)) %>% head(10)
+
+#worst <- ps %>% group_by(event_player_1_name) %>% summarize(tot_xG = sum(xG), tot_G = sum(goal), GaX = tot_G - tot_xG, att = n(), team_col = head(team_color1,1), logo = head(filename,1)) %>% arrange(desc(GaX)) %>% tail(5)
+
+best %>% ggplot(aes(x = reorder(event_player_1_name, +GaX), y = GaX, fill = team_col)) +
+  geom_bar(stat = 'identity') + 
+  coord_flip() + 
+  scale_fill_identity() + 
+  geom_image(aes(image = logo), size = 0.1) + 
+  xlab("Shooter") + 
+  ylab("Goals above expected")
+
+ps %>% group_by(event_player_1_name) %>% summarize(tot_xG = sum(xG), tot_G = sum(goal), GaX = tot_G - tot_xG, att = n(), team_col = head(team_color1,1), logo = head(filename,1)) %>% arrange(desc(tot_G)) %>% head(10)
+
+```
+
+```{r, eval = F, include = F}
+
+set.seed(37)
+train_rows <- sample(nrow(ps), 0.75*nrow(ps))
+train_x <- ps[train_rows, ] %>% 
+  mutate(distance_1 = poly(shot_distance, 3)[,1],
+         distance_2 = poly(shot_distance, 3)[,2],
+         distance_3 = poly(shot_distance, 3)[,3],
+         angle_1 = poly(shot_angle, 3)[,1],
+         angle_2 = poly(shot_angle, 3)[,2],
+         angle_3 = poly(shot_angle, 3)[,3]) %>%
+  select(distance_1, distance_2, distance_3,
+         angle_1, angle_2, angle_3)
+
+train_y <- ps[train_rows,]$goal
+
+test_x <- ps[-train_rows, ] %>% 
+  mutate(distance_1 = poly(shot_distance, 3)[,1],
+         distance_2 = poly(shot_distance, 3)[,2],
+         distance_3 = poly(shot_distance, 3)[,3],
+         angle_1 = poly(shot_angle, 3)[,1],
+         angle_2 = poly(shot_angle, 3)[,2],
+         angle_3 = poly(shot_angle, 3)[,3]) %>%
+  select(distance_1, distance_2, distance_3,
+         angle_1, angle_2, angle_3)
+
+test_y <- ps[-train_rows,]$goal
+
+train_x_model <- model.matrix(~.,data = train_x)
+test_x_model <- model.matrix(~.,data = test_x)
+
+geom_hockey("nhl") + 
+  geom_point(data = train_x, 
+             aes(abs(ps[train_rows,]$x), ps[train_rows,]$y, color = as.factor(train_y)),
+             size = 2, 
+             alpha = ifelse(train_y == 1, 1, 0.5)) +
+  geom_point(data = test_x, 
+             aes(-abs(ps[-train_rows,]$x), ps[-train_rows,]$y, color = as.factor(test_y)),
+             size = 2, 
+             alpha = ifelse(test_y == 1, 1, 0.5)) + 
+  scale_color_manual(values = c("#f9b316", "#141414"),name = "Shot Result", breaks = c(0,1), labels = c("No Goal", "Goal"))
+
+
+cvfit <- cv.glmnet(train_x_model,train_y, alpha = 0, family = "binomial", nfolds = 10, lambda = c(0.1,0.01,0.001,0.0001,0.00001))
+
+lambda_min_ind <- which(cvfit$lambda == cvfit$lambda.min)
+
+cverr_min <- cvfit$cvm[lambda_min_ind]
+
+#glm(goal~event_player_1_name+event_player_2_name+as.factor(strength_code)+poly(shot_distance, 3) + poly(shot_angle, 3), data = ps)
+
+```
+
+
+```{r, eval = F, include = F}
+
+options(scipen=999)
+
+create_viz_data <- function(dta = grid){
+  dta$angle <- (atan(abs(dta$y)/(dta$x)) * 180) / pi
+  dta$distance <- sqrt((89-dta$x)^2 + abs(dta$y)^2)
+  mat <- dta %>% 
+    mutate(distance_1 = poly(distance, 3)[,1],
+         distance_2 = poly(distance, 3)[,2],
+         distance_3 = poly(distance, 3)[,3],
+         angle_1 = poly(angle, 3)[,1],
+         angle_2 = poly(angle, 3)[,2],
+         angle_3 = poly(angle, 3)[,3]) %>%
+    select(distance_1, distance_2, distance_3,
+         angle_1, angle_2, angle_3)
+  
+  return(model.matrix(~.,mat))
+}
+
+LogLoss<-function(actual, predicted)
+{
+  result=-1/length(actual)*(sum((actual*log(predicted)+(1-actual)*log(1-predicted))))
+  return(result)
+}
+
+x_viz <- seq(25, 89, .1)
+y_viz <- seq(-40, 40, .1)
+grid <- expand.grid(list(x = x_viz, y = y_viz))
+
+coefs <- data.frame(coef.name = dimnames(coef(cvfit, s='lambda.min'))[[1]], coef.value = matrix(coef(cvfit, s='lambda.min')))
+
+coefs[order(coefs$coef.value, decreasing = T),]
+
+hist(predict(cvfit, newx = train_x_model, s="lambda.min", type='response'))
+hist(predict(cvfit, newx = test_x_model, s="lambda.min", type='response'))
+
+LogLoss(train_y, predict(cvfit, newx = train_x_model, s="lambda.min", type='response'))
+LogLoss(test_y, predict(cvfit, newx = test_x_model, s="lambda.min", type='response'))
+
+```
+
+
+```{r, eval = F, include = F}
+
+viz_predictions <- predict(cvfit, newx = create_viz_data(), s="lambda.min", type='response')
+
+viz_data <- cbind(grid, viz_predictions)
+geom_hockey("NHL") + 
+  geom_raster(data = viz_data, aes(x, y, fill=lambda.min)) + 
+  scale_fill_distiller(palette = "Spectral", direction = -1) +
+  labs(fill = "Goal Probability")
+
+```
+
+```{r, eval = F, include = F}
+library(ggimage)
+
+list.files("C:/Users/matth/OneDrive/Desktop/XG Model/",pattern="png", full.names=TRUE)
+
+logos_colors <- team_logos_colors %>% mutate(filename = paste0(substr(team_logo_espn, 43, 45), ".png", ''))
+
+for (i in 1:nrow(team_logos_colors)){
+  url <- team_logos_colors[i, ]$team_logo_espn
+  name <- paste0(substr(url, 43, 45), ".png", '')
+  if (!file.exists(name)){
+    download.file(url, name, mode = "wb")    
+  }
+}
+
+ps <- ps %>% left_join(logos_colors, by = c("event_team_abbr" = "team_abbr"))
+
+total_df <- ps %>%
+  mutate(distance_1 = poly(shot_distance, 3)[,1],
+         distance_2 = poly(shot_distance, 3)[,2],
+         distance_3 = poly(shot_distance, 3)[,3],
+         angle_1 = poly(shot_angle, 3)[,1],
+         angle_2 = poly(shot_angle, 3)[,2],
+         angle_3 = poly(shot_angle, 3)[,3]) %>%
+  select(distance_1, distance_2, distance_3,
+         angle_1, angle_2, angle_3)
+
+
+ps$xG <- predict(cvfit, newx = model.matrix(~.,total_df), s="lambda.min", type='response')
+
+best <- ps %>% group_by(event_player_1_name) %>% summarize(tot_xG = sum(xG), tot_G = sum(goal), GaX = tot_G - tot_xG, att = n(), team_col = head(team_color1,1), logo = head(filename,1)) %>% arrange(desc(GaX)) %>% head(10)
+
+#worst <- ps %>% group_by(event_player_1_name) %>% summarize(tot_xG = sum(xG), tot_G = sum(goal), GaX = tot_G - tot_xG, att = n(), team_col = head(team_color1,1), logo = head(filename,1)) %>% arrange(desc(GaX)) %>% tail(5)
+
+best %>% ggplot(aes(x = reorder(event_player_1_name, +GaX), y = GaX, fill = team_col)) +
+  geom_bar(stat = 'identity') + 
+  coord_flip() + 
+  scale_fill_identity() + 
+  geom_image(aes(image = logo), size = 0.1) + 
+  xlab("Shooter") + 
+  ylab("Goals above expected")
+
+```
+
+```{r, eval = F, include = F}
+
+geom_hockey("nhl") + geom_point(data = test_df, 
+                                aes(xCordAdjusted, yCordAdjusted, color = as.factor(goal)),
+                                size = 2, alpha = ifelse(test_df$goal == 1, 1, 0.05))
+```
+
+```{r, include = F, eval = F}
+
+glm1 <- glm(as.factor(goal) ~ shotAngleAdjusted + arenaAdjustedShotDistance + as.factor(shotType) + as.factor(shotRush) + shooterTimeOnIce, data = test_df, family = binomial)
+
+glm2 <- glm(as.factor(goal) ~ shotAngleAdjusted + arenaAdjustedShotDistance + as.factor(shotType) + as.factor(shotRush), data = test_df, family = binomial)
+
+glm3 <- glm(as.factor(goal) ~ shotAngleAdjusted + arenaAdjustedShotDistance + as.factor(shotType) + as.factor(shotRush) + as.factor(goalieNameForShot), data = test_df, family = binomial)
+
+logLoss = function(pred, actual){
+  -1*mean(log(pred[model.matrix(~ actual + 0) - pred > 0]))
+}
+
+logLoss(predict(glm1, type = 'response'), test_df$goal)
+
+logLoss(predict(glm2, type = 'response'), test_df$goal)
+
+logLoss(predict(glm3, type = 'response'), test_df$goal)
+
+logLoss(test_df$xGoal, test_df$goal)
+```

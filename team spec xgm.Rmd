@@ -1,0 +1,88 @@
+---
+title: "team spec xgm"
+author: "Matt Sheridan"
+date: "2023-08-28"
+output: pdf_document
+---
+```{r}
+library(data.table)
+library(hexbin)
+library(glmnet)
+library(readxl)
+library(ggimage)
+library(hockeyR)
+library(dplyr)
+library(ggplot2)
+library(sportyR)
+
+shots <- read.csv('shots_2021.csv')
+
+#passing_data <- read.csv("passing_data.csv")
+LogLoss<-function(actual, predicted)
+{
+  result=-1/length(actual)*(sum((actual*log(predicted)+(1-actual)*log(1-predicted))))
+  return(result)
+}
+
+#Need to figure out what to do do join shots and passing other than time
+# and why are there more shots than passes before shots lol.
+```
+
+
+
+```{r}
+
+BOS_shots <- shots %>% filter((shotOnEmptyNet == 0) & (isPlayoffGame == 0) & (shotType != ""))
+
+Julien_shots <- BOS_shots %>% filter((teamCode == "BOS") & (season %in% 2007:2016))
+
+Cassidy_shots <- BOS_shots %>% filter((teamCode == "BOS") & (season %in% 2017:2021))
+
+other_shots <- shots %>% filter((season %in% 2017:2021) & (isPlayoffGame == 0) & (shotType != ""))
+```
+
+
+```{r}
+
+
+train_seasons <- seq(2017, 2019)
+test_seasons <- c(2020, 2021)
+
+train_other <- other_shots %>% filter(season %in% train_seasons)
+train_cass <- Cassidy_shots %>% filter(season %in% train_seasons)
+
+test_other <- other_shots %>% filter(season %in% test_seasons)
+test_cass <- Cassidy_shots %>% filter(season %in% test_seasons)
+
+glm_other <- glm(goal ~ shotAngleAdjusted + shotDistance + shotType + shotRush + offWing, train_other, family = binomial)
+glm_cass <- glm(goal ~ shotAngleAdjusted + shotDistance + shotType + shotRush + offWing, train_cass, family = binomial)
+
+LogLoss(test_cass$goal, predict(glm_other, test_cass, type = 'response'))
+LogLoss(test_cass$goal, predict(glm_cass, test_cass, type = 'response'))
+
+LogLoss(test_other$goal, predict(glm_other, test_other, type = 'response'))
+LogLoss(test_other$goal, predict(glm_cass, test_other, type = 'response'))
+rm(glm_other)
+rm(glm_cass)
+```
+
+```{r}
+
+train_seasons <- seq(2007,2016, 2)
+test_seasons <- train_seasons+1
+
+Julien_train <- Julien_shots %>% filter((season %in% train_seasons))
+Julien_test <- Julien_shots %>% filter((season %in% test_seasons))
+
+glm_julien <- glm(goal ~ shotAngleAdjusted + shotDistance + shotType + shotRush + offWing, Julien_train, family = binomial)
+
+LogLoss(Julien_train$goal, predict(glm_julien, type = 'response'))
+LogLoss(Julien_train$goal, Julien_train$xGoal)
+
+LogLoss(Julien_test$goal, predict(glm_julien, newdata = Julien_test, type = 'response'))
+LogLoss(Julien_test$goal, Julien_test$xGoal)
+
+LogLoss(Cassidy_shots$goal, predict(glm_julien, newdata = Cassidy_shots, type = 'response'))
+LogLoss(Cassidy_shots$goal, Cassidy_shots$xGoal)
+
+```
